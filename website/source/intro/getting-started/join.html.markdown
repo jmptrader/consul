@@ -2,8 +2,11 @@
 layout: "intro"
 page_title: "Consul Cluster"
 sidebar_current: "gettingstarted-join"
-description: |-
-  We've started our first agent and registered and queried a service on that agent. This showed how easy it is to use Consul but didn't show how this could be extended to a scalable, production-grade service discovery infrastructure. In this step, we'll create our first real cluster with multiple members.
+description: >
+  When a Consul agent is started, it begins as an isolated cluster of its own.
+  To learn about other cluster members, the agent must join one or more other
+  nodes using a provided join address. In this step, we will set up a two-node
+  cluster and join the nodes together.
 ---
 
 # Consul Cluster
@@ -14,8 +17,8 @@ be extended to a scalable, production-grade service discovery infrastructure.
 In this step, we'll create our first real cluster with multiple members.
 
 When a Consul agent is started, it begins without knowledge of any other node:
-it is an isolated cluster of one.  To learn about other cluster members, the
-agent must _join_ an existing cluster.  To join an existing cluster, it only
+it is an isolated cluster of one. To learn about other cluster members, the
+agent must _join_ an existing cluster. To join an existing cluster, it only
 needs to know about a _single_ existing member. After it joins, the agent will
 gossip with this member and quickly discover the other members in the cluster.
 A Consul agent can join any other agent, not just agents in server mode.
@@ -40,6 +43,12 @@ of our cluster. We start by logging in to the first node:
 $ vagrant ssh n1
 ```
 
+In our previous examples, we used the [`-dev`
+flag](/docs/agent/options.html#_dev) to quickly set up a development server.
+However, this is not sufficient for use in a clustered environment. We will
+omit the `-dev` flag from here on, and instead specify our clustering flags as
+outlined below.
+
 Each node in a cluster must have a unique name. By default, Consul uses the
 hostname of the machine, but we'll manually override it using the [`-node`
 command-line option](/docs/agent/options.html#_node).
@@ -47,20 +56,32 @@ command-line option](/docs/agent/options.html#_node).
 We will also specify a [`bind` address](/docs/agent/options.html#_bind):
 this is the address that Consul listens on, and it *must* be accessible by
 all other nodes in the cluster. While a `bind` address is not strictly
-necessary (Consul will by default listen on the first private IP on a
-system), it's always best to provide one. Production servers often have
-multiple interfaces, so specifying a `bind` address assures that you will
+necessary, it's always best to provide one. Consul will by default attempt to
+listen on all IPv4 interfaces on a system, but will fail to start with an
+error if multiple private IPs are found. Since production servers often
+have multiple interfaces, specifying a `bind` address assures that you will
 never bind Consul to the wrong interface.
 
 The first node will act as our sole server in this cluster, and we indicate
 this with the [`server` switch](/docs/agent/options.html#_server).
 
+The [`-bootstrap-expect` flag](/docs/agent/options.html#_bootstrap_expect)
+hints to the Consul server the number of additional server nodes we are
+expecting to join. The purpose of this flag is to delay the bootstrapping of
+the replicated log until the expected number of servers has successfully joined.
+You can read more about this in the [bootstrapping
+guide](/docs/guides/bootstrapping.html).
+
+Finally, we add the [`config-dir` flag](/docs/agent/options.html#_config_dir),
+marking where service and check definitions can be found.
+
 All together, these settings yield a
 [`consul agent`](/docs/commands/agent.html) command like this:
 
 ```text
-vagrant@n1:~$ consul agent -server -bootstrap-expect 1 \
-	-data-dir /tmp/consul -node=agent-one -bind=172.20.20.10
+vagrant@n1:~$ consul agent -server -bootstrap-expect=1 \
+	-data-dir=/tmp/consul -node=agent-one -bind=172.20.20.10 \
+	-config-dir=/etc/consul.d
 ...
 ```
 
@@ -80,8 +101,8 @@ All together, these settings yield a
 [`consul agent`](/docs/commands/agent.html) command like this:
 
 ```text
-vagrant@n2:~$ consul agent -data-dir /tmp/consul -node=agent-two \
-	-bind=172.20.20.11
+vagrant@n2:~$ consul agent -data-dir=/tmp/consul -node=agent-two \
+	-bind=172.20.20.11 -config-dir=/etc/consul.d
 ...
 ```
 
@@ -140,8 +161,8 @@ will automatically join your Consul cluster without any hardcoded
 configuration.
 
 Alternatively, you can join a cluster at startup using the
-[`-join` flag](http://www.consul.io/docs/agent/options.html#_join) or
-[`start_join` setting](http://www.consul.io/docs/agent/options.html#start_join)
+[`-join` flag](https://www.consul.io/docs/agent/options.html#_join) or
+[`start_join` setting](https://www.consul.io/docs/agent/options.html#start_join)
 with hardcoded addresses of other known Consul agents.
 
 ## Querying Nodes

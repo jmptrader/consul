@@ -9,6 +9,7 @@ import (
 
 	"github.com/hashicorp/consul/consul/structs"
 	"github.com/hashicorp/consul/testutil"
+	"github.com/hashicorp/net-rpc-msgpackrpc"
 )
 
 func TestInitializeSessionTimers(t *testing.T) {
@@ -19,7 +20,9 @@ func TestInitializeSessionTimers(t *testing.T) {
 	testutil.WaitForLeader(t, s1.RPC, "dc1")
 
 	state := s1.fsm.State()
-	state.EnsureNode(1, structs.Node{"foo", "127.0.0.1"})
+	if err := state.EnsureNode(1, &structs.Node{Node: "foo", Address: "127.0.0.1"}); err != nil {
+		t.Fatalf("err: %s", err)
+	}
 	session := &structs.Session{
 		ID:   generateUUID(),
 		Node: "foo",
@@ -50,14 +53,16 @@ func TestResetSessionTimer_Fault(t *testing.T) {
 	testutil.WaitForLeader(t, s1.RPC, "dc1")
 
 	// Should not exist
-	err := s1.resetSessionTimer("nope", nil)
+	err := s1.resetSessionTimer(generateUUID(), nil)
 	if err == nil || !strings.Contains(err.Error(), "not found") {
 		t.Fatalf("err: %v", err)
 	}
 
 	// Create a session
 	state := s1.fsm.State()
-	state.EnsureNode(1, structs.Node{"foo", "127.0.0.1"})
+	if err := state.EnsureNode(1, &structs.Node{Node: "foo", Address: "127.0.0.1"}); err != nil {
+		t.Fatalf("err: %s", err)
+	}
 	session := &structs.Session{
 		ID:   generateUUID(),
 		Node: "foo",
@@ -89,7 +94,9 @@ func TestResetSessionTimer_NoTTL(t *testing.T) {
 
 	// Create a session
 	state := s1.fsm.State()
-	state.EnsureNode(1, structs.Node{"foo", "127.0.0.1"})
+	if err := state.EnsureNode(1, &structs.Node{Node: "foo", Address: "127.0.0.1"}); err != nil {
+		t.Fatalf("err: %s", err)
+	}
 	session := &structs.Session{
 		ID:   generateUUID(),
 		Node: "foo",
@@ -135,6 +142,8 @@ func TestResetSessionTimerLocked(t *testing.T) {
 	dir1, s1 := testServer(t)
 	defer os.RemoveAll(dir1)
 	defer s1.Shutdown()
+
+	testutil.WaitForLeader(t, s1.RPC, "dc1")
 
 	s1.sessionTimersLock.Lock()
 	s1.resetSessionTimerLocked("foo", 5*time.Millisecond)
@@ -200,7 +209,9 @@ func TestInvalidateSession(t *testing.T) {
 
 	// Create a session
 	state := s1.fsm.State()
-	state.EnsureNode(1, structs.Node{"foo", "127.0.0.1"})
+	if err := state.EnsureNode(1, &structs.Node{Node: "foo", Address: "127.0.0.1"}); err != nil {
+		t.Fatalf("err: %s", err)
+	}
 	session := &structs.Session{
 		ID:   generateUUID(),
 		Node: "foo",
@@ -288,8 +299,8 @@ func TestServer_SessionTTL_Failover(t *testing.T) {
 	}
 
 	testutil.WaitForResult(func() (bool, error) {
-		peers, _ := s1.raftPeers.Peers()
-		return len(peers) == 3, nil
+		peers, _ := s1.numPeers()
+		return peers == 3, nil
 	}, func(err error) {
 		t.Fatalf("should have 3 peers")
 	})
@@ -310,8 +321,8 @@ func TestServer_SessionTTL_Failover(t *testing.T) {
 		t.Fatalf("Should have a leader")
 	}
 
-	client := rpcClient(t, leader)
-	defer client.Close()
+	codec := rpcClient(t, leader)
+	defer codec.Close()
 
 	// Register a node
 	node := structs.RegisterRequest{
@@ -334,7 +345,7 @@ func TestServer_SessionTTL_Failover(t *testing.T) {
 		},
 	}
 	var id1 string
-	if err := client.Call("Session.Apply", &arg, &id1); err != nil {
+	if err := msgpackrpc.CallWithCodec(codec, "Session.Apply", &arg, &id1); err != nil {
 		t.Fatalf("err: %v", err)
 	}
 

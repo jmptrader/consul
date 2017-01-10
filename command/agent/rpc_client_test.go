@@ -3,8 +3,6 @@ package agent
 import (
 	"errors"
 	"fmt"
-	"github.com/hashicorp/consul/testutil"
-	"github.com/hashicorp/serf/serf"
 	"io"
 	"io/ioutil"
 	"net"
@@ -14,6 +12,10 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/hashicorp/consul/logger"
+	"github.com/hashicorp/consul/testutil"
+	"github.com/hashicorp/serf/serf"
 )
 
 type rpcParts struct {
@@ -37,9 +39,12 @@ func testRPCClient(t *testing.T) *rpcParts {
 }
 
 func testRPCClientWithConfig(t *testing.T, cb func(c *Config)) *rpcParts {
-	lw := NewLogWriter(512)
+	lw := logger.NewLogWriter(512)
 	mult := io.MultiWriter(os.Stderr, lw)
 
+	configTry := 0
+RECONF:
+	configTry += 1
 	conf := nextConfig()
 	cb(conf)
 
@@ -50,10 +55,13 @@ func testRPCClientWithConfig(t *testing.T, cb func(c *Config)) *rpcParts {
 
 	l, err := net.Listen(rpcAddr.Network(), rpcAddr.String())
 	if err != nil {
+		if configTry < 3 {
+			goto RECONF
+		}
 		t.Fatalf("err: %s", err)
 	}
 
-	dir, agent := makeAgentLog(t, conf, mult)
+	dir, agent := makeAgentLog(t, conf, mult, lw)
 	rpc := NewAgentRPC(agent, l, mult, lw)
 
 	rpcClient, err := NewRPCClient(l.Addr().String())
@@ -325,6 +333,7 @@ func TestRPCClientListKeys(t *testing.T) {
 	p1 := testRPCClientWithConfig(t, func(c *Config) {
 		c.EncryptKey = key1
 		c.Datacenter = "dc1"
+		c.ACLDatacenter = ""
 	})
 	defer p1.Close()
 
@@ -343,6 +352,7 @@ func TestRPCClientInstallKey(t *testing.T) {
 	key2 := "xAEZ3uVHRMZD9GcYMZaRQw=="
 	p1 := testRPCClientWithConfig(t, func(c *Config) {
 		c.EncryptKey = key1
+		c.ACLDatacenter = ""
 	})
 	defer p1.Close()
 
@@ -361,7 +371,7 @@ func TestRPCClientInstallKey(t *testing.T) {
 	})
 
 	// install key2
-	r, err := p1.client.InstallKey(key2)
+	r, err := p1.client.InstallKey(key2, "")
 	if err != nil {
 		t.Fatalf("err: %s", err)
 	}
@@ -387,11 +397,12 @@ func TestRPCClientUseKey(t *testing.T) {
 	key2 := "xAEZ3uVHRMZD9GcYMZaRQw=="
 	p1 := testRPCClientWithConfig(t, func(c *Config) {
 		c.EncryptKey = key1
+		c.ACLDatacenter = ""
 	})
 	defer p1.Close()
 
 	// add a second key to the ring
-	r, err := p1.client.InstallKey(key2)
+	r, err := p1.client.InstallKey(key2, "")
 	if err != nil {
 		t.Fatalf("err: %s", err)
 	}
@@ -412,21 +423,21 @@ func TestRPCClientUseKey(t *testing.T) {
 	})
 
 	// can't remove key1 yet
-	r, err = p1.client.RemoveKey(key1)
+	r, err = p1.client.RemoveKey(key1, "")
 	if err != nil {
 		t.Fatalf("err: %s", err)
 	}
 	keyringError(t, r)
 
 	// change primary key
-	r, err = p1.client.UseKey(key2)
+	r, err = p1.client.UseKey(key2, "")
 	if err != nil {
 		t.Fatalf("err: %s", err)
 	}
 	keyringSuccess(t, r)
 
 	// can remove key1 now
-	r, err = p1.client.RemoveKey(key1)
+	r, err = p1.client.RemoveKey(key1, "")
 	if err != nil {
 		t.Fatalf("err: %s", err)
 	}
@@ -434,10 +445,12 @@ func TestRPCClientUseKey(t *testing.T) {
 }
 
 func TestRPCClientKeyOperation_encryptionDisabled(t *testing.T) {
-	p1 := testRPCClient(t)
+	p1 := testRPCClientWithConfig(t, func(c *Config) {
+		c.ACLDatacenter = ""
+	})
 	defer p1.Close()
 
-	r, err := p1.client.ListKeys()
+	r, err := p1.client.ListKeys("")
 	if err != nil {
 		t.Fatalf("err: %s", err)
 	}
@@ -445,7 +458,7 @@ func TestRPCClientKeyOperation_encryptionDisabled(t *testing.T) {
 }
 
 func listKeys(t *testing.T, c *RPCClient) map[string]map[string]int {
-	resp, err := c.ListKeys()
+	resp, err := c.ListKeys("")
 	if err != nil {
 		t.Fatalf("err: %s", err)
 	}

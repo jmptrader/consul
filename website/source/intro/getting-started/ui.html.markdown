@@ -39,24 +39,17 @@ To get an Atlas username and token,
 and replace the respective values in your Consul configuration with
 your credentials.
 
-You can view a live demo
-[here](https://atlas.hashicorp.com/hashicorp/infrastructures/consul-demo).
-
 ## Self-hosted Dashboard
 
 <div class="center">
 ![Consul Web UI](consul_web_ui.png)
 </div>
 
-To set up the self-hosted UI, [download the web UI package](/downloads.html)
-and unzip it to a directory somewhere on a system with a Consul agent
-install. Restart the Consul agent, and append a
-[`-ui-dir` parameter](/docs/agent/options.html#_ui_dir)
-pointing to the directory where you unzipped the UI (that is, the
-directory containing the `index.html` file):
+To set up the self-hosted UI, start the Consul agent with the
+[`-ui` parameter](/docs/agent/options.html#_ui):
 
 ```text
-$ consul agent -ui-dir /path/to/ui
+$ consul agent -ui
 ...
 ```
 
@@ -66,14 +59,8 @@ By default this is `http://localhost:8500/ui`.
 You can view a live demo of the Consul Web UI
 [here](http://demo.consul.io).
 
-While the live demo is able to access data from all datacenters,
-we've also setup demo endpoints in the specific datacenters:
-[AMS2](http://ams2.demo.consul.io) (Amsterdam),
-[SFO1](http://sfo1.demo.consul.io) (San Francisco),
-and [NYC3](http://nyc3.demo.consul.io) (New York).
-
 ## Next Steps
 
-This concludes our Getting Started guide.  See the
+This concludes our Getting Started guide. See the
 [next steps](next-steps.html) page to learn more about how to continue
 your journey with Consul!

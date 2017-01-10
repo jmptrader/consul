@@ -21,14 +21,13 @@ cover all the possible methods. Instead, we will focus on using Consul's support
 [sessions](/docs/internals/sessions.html). Sessions allow us to build a system that
 can gracefully handle failures.
 
-Note that JSON output in this guide has been pretty-printed for easier
-reading.  Actual values returned from the API will not be formatted.
+-> **Note:** JSON output in this guide has been pretty-printed for easier reading. Actual values returned from the API will not be formatted.
 
 ## Contending Nodes
 
 Let's imagine we have a set of nodes who are attempting to acquire a slot in the
 semaphore. All nodes that are participating should agree on three decisions: the
-prefix in the Key/Value store used to coordinate, a single key to use as a lock, 
+prefix in the Key/Value store used to coordinate, a single key to use as a lock,
 and a limit on the number of slot holders.
 
 For the prefix we will be using for coordination, a good pattern is simply:
@@ -73,7 +72,7 @@ The `<session>` value is the ID returned by the call to
 to Consul but can be useful for human operators.
 
 The call will either return `true` or `false`. If `true`, the contender entry has been
-created. If `false`, the contender node was not created; it'slikely that this indicates
+created. If `false`, the contender node was not created; it's likely that this indicates
 a session invalidation.
 
 The next step is to use a single key to coordinate which holders are currently
@@ -117,7 +116,7 @@ This is done by:
 curl -X PUT -d <Updated Lock> http://localhost:8500/v1/kv/<lock>?cas=<lock-modify-index>
  ```
 
-If this suceeds with `true`, the contender now holds a slot in the semaphore. If this fails
+If this succeeds with `true`, the contender now holds a slot in the semaphore. If this fails
 with `false`, then likely there was a race with another contender to acquire the slot.
 Both code paths now go into an idle waiting state. In this state, we watch for changes
 on `<prefix>`. This is because a slot may be released, a node may fail, etc.
@@ -130,7 +129,7 @@ has not declared the node unhealthy. Additional checks can be specified if desir
 
 Watching for changes is done via a blocking query against `<prefix>`. If a contender
 holds a slot, then on any change the `<lock>` should be re-checked to ensure the slot is
-still held.  If no slot is held, then the same acquisition logic is triggered to check
+still held. If no slot is held, then the same acquisition logic is triggered to check
 and potentially re-attempt acquisition. This allows a contender to steal the slot from
 a failed contender or one that has voluntarily released its slot.
 

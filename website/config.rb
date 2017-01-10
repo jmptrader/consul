@@ -5,20 +5,9 @@
 set :base_url, "https://www.consul.io/"
 
 activate :hashicorp do |h|
-  h.version         = "0.5.2"
-  h.bintray_enabled = ENV["BINTRAY_ENABLED"]
-  h.bintray_repo    = "mitchellh/consul"
-  h.bintray_user    = "mitchellh"
-  h.bintray_key     = ENV["BINTRAY_API_KEY"]
-
-  # Do not include the "web" in the default list of packages
-  h.bintray_exclude_proc = Proc.new do |os, filename|
-    os == "web"
-  end
-
-  # Consul packages are not prefixed with consul_ - they should be in the
-  # future though!
-  h.bintray_prefixed = false
+  h.name        = "consul"
+  h.version     = "0.7.2"
+  h.github_slug = "hashicorp/consul"
 end
 
 helpers do
@@ -44,5 +33,16 @@ helpers do
     end
 
     "Consul by HashiCorp"
+  end
+
+  # Get the description for the page
+  #
+  # @param [Middleman::Page] page
+  #
+  # @return [String]
+  def description_for(page)
+    description = page.data.description || ""
+    description = description.gsub(/\n+/, " ")
+    return escape_html(description)
   end
 end

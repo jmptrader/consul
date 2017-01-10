@@ -5,9 +5,12 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/hashicorp/consul/consul/structs"
 	"github.com/hashicorp/consul/testutil"
 )
 
@@ -51,10 +54,72 @@ func TestEventFire(t *testing.T) {
 	})
 }
 
+func TestEventFire_token(t *testing.T) {
+	httpTestWithConfig(t, func(srv *HTTPServer) {
+		// Create an ACL token
+		args := structs.ACLRequest{
+			Datacenter: "dc1",
+			Op:         structs.ACLSet,
+			ACL: structs.ACL{
+				Name:  "User token",
+				Type:  structs.ACLTypeClient,
+				Rules: testEventPolicy,
+			},
+			WriteRequest: structs.WriteRequest{Token: "root"},
+		}
+		var token string
+		if err := srv.agent.RPC("ACL.Apply", &args, &token); err != nil {
+			t.Fatalf("err: %v", err)
+		}
+
+		type tcase struct {
+			event   string
+			allowed bool
+		}
+		tcases := []tcase{
+			{"foo", false},
+			{"bar", false},
+			{"baz", true},
+		}
+		for _, c := range tcases {
+			// Try to fire the event over the HTTP interface
+			url := fmt.Sprintf("/v1/event/fire/%s?token=%s", c.event, token)
+			req, err := http.NewRequest("PUT", url, nil)
+			if err != nil {
+				t.Fatalf("err: %s", err)
+			}
+			resp := httptest.NewRecorder()
+			if _, err := srv.EventFire(resp, req); err != nil {
+				t.Fatalf("err: %s", err)
+			}
+
+			// Check the result
+			body := resp.Body.String()
+			if c.allowed {
+				if strings.Contains(body, permissionDenied) {
+					t.Fatalf("bad: %s", body)
+				}
+				if resp.Code != 200 {
+					t.Fatalf("bad: %d", resp.Code)
+				}
+			} else {
+				if !strings.Contains(body, permissionDenied) {
+					t.Fatalf("bad: %s", body)
+				}
+				if resp.Code != 403 {
+					t.Fatalf("bad: %d", resp.Code)
+				}
+			}
+		}
+	}, func(c *Config) {
+		c.ACLDefaultPolicy = "deny"
+	})
+}
+
 func TestEventList(t *testing.T) {
 	httpTest(t, func(srv *HTTPServer) {
 		p := &UserEvent{Name: "test"}
-		if err := srv.agent.UserEvent("", p); err != nil {
+		if err := srv.agent.UserEvent("dc1", "root", p); err != nil {
 			t.Fatalf("err: %v", err)
 		}
 
@@ -90,12 +155,12 @@ func TestEventList(t *testing.T) {
 func TestEventList_Filter(t *testing.T) {
 	httpTest(t, func(srv *HTTPServer) {
 		p := &UserEvent{Name: "test"}
-		if err := srv.agent.UserEvent("", p); err != nil {
+		if err := srv.agent.UserEvent("dc1", "root", p); err != nil {
 			t.Fatalf("err: %v", err)
 		}
 
 		p = &UserEvent{Name: "foo"}
-		if err := srv.agent.UserEvent("", p); err != nil {
+		if err := srv.agent.UserEvent("dc1", "root", p); err != nil {
 			t.Fatalf("err: %v", err)
 		}
 
@@ -128,10 +193,75 @@ func TestEventList_Filter(t *testing.T) {
 	})
 }
 
+func TestEventList_ACLFilter(t *testing.T) {
+	dir, srv := makeHTTPServerWithACLs(t)
+	defer os.RemoveAll(dir)
+	defer srv.Shutdown()
+	defer srv.agent.Shutdown()
+
+	// Fire an event.
+	p := &UserEvent{Name: "foo"}
+	if err := srv.agent.UserEvent("dc1", "root", p); err != nil {
+		t.Fatalf("err: %v", err)
+	}
+
+	// Try no token.
+	{
+		testutil.WaitForResult(func() (bool, error) {
+			req, err := http.NewRequest("GET", "/v1/event/list", nil)
+			if err != nil {
+				return false, err
+			}
+			resp := httptest.NewRecorder()
+			obj, err := srv.EventList(resp, req)
+			if err != nil {
+				return false, err
+			}
+
+			list, ok := obj.([]*UserEvent)
+			if !ok {
+				return false, fmt.Errorf("bad: %#v", obj)
+			}
+			if len(list) != 0 {
+				return false, fmt.Errorf("bad: %#v", list)
+			}
+			return true, nil
+		}, func(err error) {
+			t.Fatalf("err: %v", err)
+		})
+	}
+
+	// Try the root token.
+	{
+		testutil.WaitForResult(func() (bool, error) {
+			req, err := http.NewRequest("GET", "/v1/event/list?token=root", nil)
+			if err != nil {
+				return false, err
+			}
+			resp := httptest.NewRecorder()
+			obj, err := srv.EventList(resp, req)
+			if err != nil {
+				return false, err
+			}
+
+			list, ok := obj.([]*UserEvent)
+			if !ok {
+				return false, fmt.Errorf("bad: %#v", obj)
+			}
+			if len(list) != 1 || list[0].Name != "foo" {
+				return false, fmt.Errorf("bad: %#v", list)
+			}
+			return true, nil
+		}, func(err error) {
+			t.Fatalf("err: %v", err)
+		})
+	}
+}
+
 func TestEventList_Blocking(t *testing.T) {
 	httpTest(t, func(srv *HTTPServer) {
 		p := &UserEvent{Name: "test"}
-		if err := srv.agent.UserEvent("", p); err != nil {
+		if err := srv.agent.UserEvent("dc1", "root", p); err != nil {
 			t.Fatalf("err: %v", err)
 		}
 
@@ -159,7 +289,7 @@ func TestEventList_Blocking(t *testing.T) {
 		go func() {
 			time.Sleep(50 * time.Millisecond)
 			p := &UserEvent{Name: "second"}
-			if err := srv.agent.UserEvent("", p); err != nil {
+			if err := srv.agent.UserEvent("dc1", "root", p); err != nil {
 				t.Fatalf("err: %v", err)
 			}
 		}()
@@ -202,7 +332,7 @@ func TestEventList_EventBufOrder(t *testing.T) {
 			expected,
 			&UserEvent{Name: "bar"},
 		} {
-			if err := srv.agent.UserEvent("", e); err != nil {
+			if err := srv.agent.UserEvent("dc1", "root", e); err != nil {
 				t.Fatalf("err: %v", err)
 			}
 		}

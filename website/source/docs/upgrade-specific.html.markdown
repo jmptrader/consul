@@ -11,19 +11,173 @@ description: |-
 The [upgrading page](/docs/upgrading.html) covers the details of doing
 a standard upgrade. However, specific versions of Consul may have more
 details provided for their upgrades as a result of new features or changed
-behavior. This page is used to document those details seperately from the
+behavior. This page is used to document those details separately from the
 standard upgrade flow.
 
+## Consul 0.7.1
+
+#### Child Process Reaping
+
+Child process reaping support has been removed, along with the `reap` configuration option. Reaping is also done via [dumb-init](https://github.com/Yelp/dumb-init) in the [Consul Docker image](https://github.com/hashicorp/docker-consul), so removing it from Consul itself simplifies the code and eases future maintainence for Consul. If you are running Consul as PID 1 in a container you will need to arrange for a wrapper process to reap child processes.
+
+#### DNS Resiliency Defaults
+
+The default for [`max_stale`](/docs/agent/options.html#max_stale) was been increased from 5 seconds to a near-indefinite threshold (10 years) to allow DNS queries to continue to be served in the event of a long outage with no leader. A new telemetry counter was added at `consul.dns.stale_queries` to track when agents serve DNS queries that are stale by more than 5 seconds.
+
+## Consul 0.7
+
+Consul version 0.7 is a very large release with many important changes. Changes
+to be aware of during an upgrade are categorized below.
+
+#### Performance Timing Defaults and Tuning
+
+Consul 0.7 now defaults the DNS configuration to allow for stale queries by defaulting
+[`allow_stale`](/docs/agent/options.html#allow_stale) to true for better utilization
+of available servers. If you want to retain the previous behavior, set the following
+configuration:
+
+```javascript
+{
+  "dns_config": {
+    "allow_stale": false
+  }
+}
+```
+
+Consul also 0.7 introduced support for tuning Raft performance using a new
+[performance configuration block](/docs/agent/options.html#performance). Also,
+the default Raft timing is set to a lower-performance mode suitable for
+[minimal Consul servers](/docs/guides/performance.html#minumum).
+
+To continue to use the high-performance settings that were the default prior to
+Consul 0.7 (recommended for production servers), add the following configuration
+to all Consul servers when upgrading:
+
+```javascript
+{
+  "performance": {
+    "raft_multiplier": 1
+  }
+}
+```
+
+See the [Server Performance](/docs/guides/performance.html) guide for more details.
+
+#### Leave-Related Configuration Defaults
+
+The default behavior of [`leave_on_terminate`](/docs/agent/options.html#leave_on_terminate)
+and [`skip_leave_on_interrupt`](/docs/agent/options.html#skip_leave_on_interrupt)
+are now dependent on whether or not the agent is acting as a server or client:
+
+* For servers, `leave_on_terminate` defaults to "false" and `skip_leave_on_interrupt`
+defaults to "true".
+
+* For clients, `leave_on_terminate` defaults to "true" and `skip_leave_on_interrupt`
+defaults to "false".
+
+These defaults are designed to be safer for servers so that you must explicitly
+configure them to leave the cluster. This also results in a better experience for
+clients, especially in cloud environments where they may be created and destroyed
+often and users prefer not to wait for the 72 hour reap time for cleanup.
+
+#### Dropped Support for Protocol Version 1
+
+Consul version 0.7 dropped support for protocol version 1, which means it
+is no longer compatible with versions of Consul prior to 0.3. You will need
+to upgrade all agents to a newer version of Consul before upgrading to Consul
+0.7.
+
+#### Prepared Query Changes
+
+Consul version 0.7 adds a feature which allows prepared queries to store a
+[`Near` parameter](/docs/agent/http/query.html#near) in the query definition
+itself. This feature enables using the distance sorting features of prepared
+queries without explicitly providing the node to sort near in requests, but
+requires the agent servicing a request to send additional information about
+itself to the Consul servers when executing the prepared query. Agents prior
+to 0.7 do not send this information, which means they are unable to properly
+execute prepared queries configured with a `Near` parameter. Similarly, any
+server nodes prior to version 0.7 are unable to store the `Near` parameter,
+making them unable to properly serve requests for prepared queries using the
+feature. It is recommended that all agents be running version 0.7 prior to
+using this feature.
+
+#### WAN Address Translation in HTTP Endpoints
+
+Consul version 0.7 added support for translating WAN addresses in certain
+[HTTP endpoints](/docs/agent/options.html#translate_wan_addrs). The servers
+and the agents need to be running version 0.7 or later in order to use this
+feature.
+
+These translated addresses could break HTTP endpoint consumers that are
+expecting local addresses, so a new [`X-Consul-Translate-Addresses`](/docs/agent/http.html#translate_header)
+header was added to allow clients to detect if translation is enabled for HTTP
+responses. A "lan" tag was added to `TaggedAddresses` for clients that need
+the local address regardless of translation.
+
+#### Outage Recovery and `peers.json` Changes
+
+The `peers.json` file is no longer present by default and is only used when
+performing recovery. This file will be deleted after Consul starts and ingests
+the file. Consul 0.7 also uses a new, automatically-created raft/peers.info file
+to avoid ingesting the `peers.json` file on the first start after upgrading (the
+`peers.json` file is simply deleted on the first start after upgrading).
+
+Please be sure to review the [Outage Recovery Guide](/docs/guides/outage.html)
+before upgrading for more details.
+
+## Consul 0.6.4
+
+Consul 0.6.4 made some substantial changes to how ACLs work with prepared
+queries. Existing queries will execute with no changes, but there are important
+differences to understand about how prepared queries are managed before you
+upgrade. In particular, prepared queries with no `Name` defined will no longer
+require any ACL to manage them, and prepared queries with a `Name` defined are
+now governed by a new `query` ACL policy that will need to be configured
+after the upgrade.
+
+See the [Prepared Query ACLs](/docs/internals/acl.html#prepared_query_acls)
+internals guide for more details about the new behavior and how it compares to
+previous versions of Consul.
+
 ## Consul 0.6
+
+Consul version 0.6 is a very large release with many enhancements and
+optimizations. Changes to be aware of during an upgrade are categorized below.
+
+#### Data Store Changes
+
+Consul changed the format used to store data on the server nodes in version 0.5
+(see 0.5.1 notes below for details). Previously, Consul would automatically
+detect data directories using the old LMDB format, and convert them to the newer
+BoltDB format. This automatic upgrade has been removed for Consul 0.6, and
+instead a safeguard has been put in place which will prevent Consul from booting
+if the old directory format is detected.
+
+It is still possible to migrate from a 0.5.x version of Consul to 0.6+ using the
+[consul-migrate](https://github.com/hashicorp/consul-migrate) CLI utility. This
+is the same tool that was previously embedded into Consul. See the
+[releases](https://github.com/hashicorp/consul-migrate/releases) page for
+downloadable versions of the tool.
+
+Also, in this release Consul switched from LMDB to a fully in-memory database for
+the state store. Because LMDB is a disk-based backing store, it was able to store
+more data than could fit in RAM in some cases (though this is not a recommended
+configuration for Consul). If you have an extremely large data set that won't fit
+into RAM, you may encounter issues upgrading to Consul 0.6.0 and later. Consul
+should be provisioned with physical memory approximately 2X the data set size to
+allow for bursty allocations and subsequent garbage collection.
+
+#### ACL Enhancements
 
 Consul 0.6 introduces enhancements to the ACL system which may require special
 handling:
 
-* Service ACL's are enforced during service discovery (REST + DNS)
+* Service ACLs are enforced during service discovery (REST + DNS)
 
 Previously, service discovery was wide open, and any client could query
 information about any service without providing a token. Consul now requires
-read-level access at a minimum when ACL's are enabled to return service
+read-level access at a minimum when ACLs are enabled to return service
 information over the REST or DNS interfaces. If clients depend on an open
 service discovery system, then the following should be added to all ACL tokens
 which require it:
@@ -33,9 +187,44 @@ which require it:
         policy = "read"
     }
 
-Note that the agent's [`acl_token`](/docs/agent/options.html#acl_token) is used
-when the DNS interface is queried, so be sure that token has sufficient
-privileges to return the DNS records you expect to retrieve from it.
+When the DNS interface is queried, the agent's
+[`acl_token`](/docs/agent/options.html#acl_token) is used, so be sure
+that token has sufficient privileges to return the DNS records you
+expect to retrieve from it.
+
+* Event and keyring ACLs
+
+Similar to service discovery, the new event and keyring ACLs will block access
+to these operations if the `acl_default_policy` is set to `deny`. If clients depend
+on open access to these, then the following should be added to all ACL tokens which
+require them:
+
+    event "" {
+      policy = "write"
+    }
+
+    keyring = "write"
+
+Unfortunately, these are new ACLs for Consul 0.6, so they must be added after the
+upgrade is complete.
+
+#### Prepared Queries
+
+Prepared queries introduce a new Raft log entry type that isn't supported on older
+versions of Consul. It's important to not use the prepared query features of Consul
+until all servers in a cluster have been upgraded to version 0.6.0.
+
+#### Single Private IP Enforcement
+
+Consul will refuse to start if there are multiple private IPs available, so
+if this is the case you will need to configure Consul's advertise or bind addresses
+before upgrading.
+
+#### New Web UI File Layout
+
+The release .zip file for Consul's web UI no longer contains a `dist` sub-folder;
+everything has been moved up one level. If you have any automated scripts that
+expect the old layout you may need to update them.
 
 ## Consul 0.5.1
 

@@ -32,6 +32,7 @@ import (
 	"sync"
 
 	"github.com/hashicorp/consul/consul/structs"
+	"github.com/hashicorp/consul/logger"
 	"github.com/hashicorp/go-msgpack/codec"
 	"github.com/hashicorp/logutils"
 	"github.com/hashicorp/serf/serf"
@@ -78,6 +79,7 @@ var msgpackHandle = &codec.MsgpackHandle{
 type requestHeader struct {
 	Command string
 	Seq     uint64
+	Token   string
 }
 
 // Response header is sent before each response
@@ -88,12 +90,6 @@ type responseHeader struct {
 
 type handshakeRequest struct {
 	Version int32
-}
-
-type eventRequest struct {
-	Name     string
-	Payload  []byte
-	Coalesce bool
 }
 
 type forceLeaveRequest struct {
@@ -148,10 +144,6 @@ type monitorRequest struct {
 	LogLevel string
 }
 
-type streamRequest struct {
-	Type string
-}
-
 type stopRequest struct {
 	Stop uint64
 }
@@ -160,20 +152,12 @@ type logRecord struct {
 	Log string
 }
 
-type userEventRecord struct {
-	Event    string
-	LTime    serf.LamportTime
-	Name     string
-	Payload  []byte
-	Coalesce bool
-}
-
 type Member struct {
 	Name        string
 	Addr        net.IP
-	Port        uint16
 	Tags        map[string]string
 	Status      string
+	Port        uint16
 	ProtocolMin uint8
 	ProtocolMax uint8
 	ProtocolCur uint8
@@ -182,18 +166,13 @@ type Member struct {
 	DelegateCur uint8
 }
 
-type memberEventRecord struct {
-	Event   string
-	Members []Member
-}
-
 type AgentRPC struct {
 	sync.Mutex
 	agent     *Agent
 	clients   map[string]*rpcClient
 	listener  net.Listener
 	logger    *log.Logger
-	logWriter *logWriter
+	logWriter *logger.LogWriter
 	reloadCh  chan struct{}
 	stop      bool
 	stopCh    chan struct{}
@@ -240,7 +219,7 @@ func (c *rpcClient) String() string {
 
 // NewAgentRPC is used to create a new Agent RPC handler
 func NewAgentRPC(agent *Agent, listener net.Listener,
-	logOutput io.Writer, logWriter *logWriter) *AgentRPC {
+	logOutput io.Writer, logWriter *logger.LogWriter) *AgentRPC {
 	if logOutput == nil {
 		logOutput = os.Stderr
 	}
@@ -345,7 +324,7 @@ func (i *AgentRPC) handleClient(client *rpcClient) {
 				// The second part of this if is to block socket
 				// errors from Windows which appear to happen every
 				// time there is an EOF.
-				if err != io.EOF && !strings.Contains(err.Error(), "WSARecv") {
+				if err != io.EOF && !strings.Contains(strings.ToLower(err.Error()), "wsarecv") {
 					i.logger.Printf("[ERR] agent.rpc: failed to decode request header: %v", err)
 				}
 			}
@@ -365,6 +344,7 @@ func (i *AgentRPC) handleRequest(client *rpcClient, reqHeader *requestHeader) er
 	// Look for a command field
 	command := reqHeader.Command
 	seq := reqHeader.Seq
+	token := reqHeader.Token
 
 	// Ensure the handshake is performed before other commands
 	if command != handshakeCommand && client.version == 0 {
@@ -406,7 +386,7 @@ func (i *AgentRPC) handleRequest(client *rpcClient, reqHeader *requestHeader) er
 		return i.handleReload(client, seq)
 
 	case installKeyCommand, useKeyCommand, removeKeyCommand, listKeysCommand:
-		return i.handleKeyring(client, seq, command)
+		return i.handleKeyring(client, seq, command, token)
 
 	default:
 		respHeader := responseHeader{Seq: seq, Error: unsupportedCommand}
@@ -534,9 +514,9 @@ func (i *AgentRPC) handleMonitor(client *rpcClient, seq uint64) error {
 	req.LogLevel = strings.ToUpper(req.LogLevel)
 
 	// Create a level filter
-	filter := LevelFilter()
+	filter := logger.LevelFilter()
 	filter.MinLevel = logutils.LogLevel(req.LogLevel)
-	if !ValidateLevelFilter(filter.MinLevel, filter) {
+	if !logger.ValidateLevelFilter(filter.MinLevel, filter) {
 		resp.Error = fmt.Sprintf("Unknown log level: %s", filter.MinLevel)
 		goto SEND
 	}
@@ -618,7 +598,7 @@ func (i *AgentRPC) handleReload(client *rpcClient, seq uint64) error {
 	return client.Send(&resp, nil)
 }
 
-func (i *AgentRPC) handleKeyring(client *rpcClient, seq uint64, cmd string) error {
+func (i *AgentRPC) handleKeyring(client *rpcClient, seq uint64, cmd, token string) error {
 	var req keyringRequest
 	var queryResp *structs.KeyringResponses
 	var r keyringResponse
@@ -632,13 +612,13 @@ func (i *AgentRPC) handleKeyring(client *rpcClient, seq uint64, cmd string) erro
 
 	switch cmd {
 	case listKeysCommand:
-		queryResp, err = i.agent.ListKeys()
+		queryResp, err = i.agent.ListKeys(token)
 	case installKeyCommand:
-		queryResp, err = i.agent.InstallKey(req.Key)
+		queryResp, err = i.agent.InstallKey(req.Key, token)
 	case useKeyCommand:
-		queryResp, err = i.agent.UseKey(req.Key)
+		queryResp, err = i.agent.UseKey(req.Key, token)
 	case removeKeyCommand:
-		queryResp, err = i.agent.RemoveKey(req.Key)
+		queryResp, err = i.agent.RemoveKey(req.Key, token)
 	default:
 		respHeader := responseHeader{Seq: seq, Error: unsupportedCommand}
 		client.Send(&respHeader, nil)

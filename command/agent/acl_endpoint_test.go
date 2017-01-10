@@ -94,14 +94,29 @@ func TestACLUpdate_Upsert(t *testing.T) {
 func TestACLDestroy(t *testing.T) {
 	httpTest(t, func(srv *HTTPServer) {
 		id := makeTestACL(t, srv)
-		req, err := http.NewRequest("PUT", "/v1/session/destroy/"+id+"?token=root", nil)
+		req, err := http.NewRequest("PUT", "/v1/acl/destroy/"+id+"?token=root", nil)
 		resp := httptest.NewRecorder()
 		obj, err := srv.ACLDestroy(resp, req)
 		if err != nil {
 			t.Fatalf("err: %v", err)
 		}
-		if resp := obj.(bool); !resp {
+		if resp, ok := obj.(bool); !ok || !resp {
 			t.Fatalf("should work")
+		}
+
+		req, err = http.NewRequest("GET",
+			"/v1/acl/info/"+id, nil)
+		resp = httptest.NewRecorder()
+		obj, err = srv.ACLGet(resp, req)
+		if err != nil {
+			t.Fatalf("err: %v", err)
+		}
+		respObj, ok := obj.(structs.ACLs)
+		if !ok {
+			t.Fatalf("should work")
+		}
+		if len(respObj) != 0 {
+			t.Fatalf("bad: %v", respObj)
 		}
 	})
 }
@@ -144,6 +159,22 @@ func TestACLClone(t *testing.T) {
 
 func TestACLGet(t *testing.T) {
 	httpTest(t, func(srv *HTTPServer) {
+		req, err := http.NewRequest("GET", "/v1/acl/info/nope", nil)
+		resp := httptest.NewRecorder()
+		obj, err := srv.ACLGet(resp, req)
+		if err != nil {
+			t.Fatalf("err: %v", err)
+		}
+		respObj, ok := obj.(structs.ACLs)
+		if !ok {
+			t.Fatalf("should work")
+		}
+		if respObj == nil || len(respObj) != 0 {
+			t.Fatalf("bad: %v", respObj)
+		}
+	})
+
+	httpTest(t, func(srv *HTTPServer) {
 		id := makeTestACL(t, srv)
 
 		req, err := http.NewRequest("GET",
@@ -184,6 +215,21 @@ func TestACLList(t *testing.T) {
 		// 10 + anonymous + master
 		if len(respObj) != 12 {
 			t.Fatalf("bad: %v", respObj)
+		}
+	})
+}
+
+func TestACLReplicationStatus(t *testing.T) {
+	httpTest(t, func(srv *HTTPServer) {
+		req, err := http.NewRequest("GET", "/v1/acl/replication", nil)
+		resp := httptest.NewRecorder()
+		obj, err := srv.ACLReplicationStatus(resp, req)
+		if err != nil {
+			t.Fatalf("err: %v", err)
+		}
+		_, ok := obj.(structs.ACLReplicationStatus)
+		if !ok {
+			t.Fatalf("should work")
 		}
 	})
 }
